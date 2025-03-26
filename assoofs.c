@@ -20,6 +20,7 @@ static int assoofs_create(struct mnt_idmap *idmap, struct inode *dir, struct den
 struct dentry *assoofs_lookup(struct inode *parent_inode, struct dentry *child_dentry, unsigned int flags);
 static int assoofs_mkdir(struct mnt_idmap *idmap, struct inode *dir , struct dentry *dentry, umode_t mode); //MODIFICADO MIGRACION el primer argumento cambia
 static int assoofs_remove(struct inode *dir, struct dentry *dentry);
+struct assoofs_inode_info *assoofs_get_inode_info(struct super_block *sb, uint64_t inode_no);
 
 /*
  *  Estructuras de datos necesarias
@@ -81,13 +82,31 @@ static int assoofs_iterate(struct file *filp, struct dir_context *ctx) {
     return 0;
 }
 
+
 /*
  *  Funciones que realizan operaciones sobre inodos
  */
 struct dentry *assoofs_lookup(struct inode *parent_inode, struct dentry *child_dentry, unsigned int flags) {
     printk(KERN_INFO "Lookup request\n");
+    struct assoofs_inode_info *parent_info = parent_inode->i_private;//Sacamos la informacion del inodo padre
+    struct super_block *sb = parent_inode->i_sb;//Sacamos el superbloque del inodo padre
+    struct buffer_head *bh;//Creamos un buffer_head para leer el bloque de datos
+    bh = sb_bread(sb, parent_inode_info->data_block_number);//Cargamos el superbloque en bh
+
+    struct assoofs_dir_record_entry *record = (struct assoofs_dir_record_entry *)bh->b_data;//Record sera el puntero que usaremos para recorrer nustro sistema de ficheros
+    for(i=0;i<parent_info->dir_children_count;i++){//Iniciamos el bucle for para recorrer  nuestro sistema de archivos, 
+        if(!strcmp(record->filename, child_dentry->d_name.name) && !record->entry_removed == ASSOOFS_FALSE){//Comparamos los nombres del archivo en el que se encuentra el puntero y del archivo que se supones que nos han pedido localizar
+            struct inode *inode = assoofs_get_inode(sb, record->inode_no);//Si encontramos el archivo que buscamos, creamos un inodo para el archivo
+            inode_init_owner(&nop_mnt_idmap,inode,parent_inode,((struct assoofs_inode_info *)inode->i_private)->mode);//Inicializamos el inodo
+            d_add(child_dentry,inode);//Añadimos el inodo al directorio
+            return NULL;
+        }
+    }
+
     return NULL;
 }
+
+
 
 
 static int assoofs_create(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, umode_t mode, bool excl) {
@@ -103,6 +122,53 @@ static int assoofs_mkdir(struct mnt_idmap *idmap, struct inode *dir , struct den
 static int assoofs_remove(struct inode *dir, struct dentry *dentry){
     printk(KERN_INFO "assoofs_remove request\n");
     return 0;
+}
+
+static struct inode *assoofs_get_inode(struct super_block *sb, int ino){
+    struct assoofs_inode_info *inode_info;
+    inode_info = assoofs_get_inode_info(sb, ino);
+
+    struct inode *inode = new_inode(sb);
+    inode->i_ino = ino;
+    inode->i_sb = sb;
+    inode->i_op = &assoofs_inode_ops;
+    inode->i_fop = &assoofs_file_operations;
+    struct timespec64 ts = current_time(inode);
+    inode_set_ctime(inode,ts.tv_sec,ts.tv_nsec);
+    inode_set_mtime(inode,ts.tv_sec,ts.tv_nsec);
+    inode_set_atime(inode,ts.tv_sec,ts.tv_nsec);
+    inode->i_private = inode_info;
+
+    return inode;
+}
+
+struct assoofs_inode_info *assoofs_get_inode_info(struct super_block *sb, uint64_t inode_no){
+    struct assoofs_inode_info *inode_info;
+    struct buffer_head *bh;
+
+    bh = sb_bread(sb, ASSOOFS_INODESTORE_BLOCK_NUMBER);
+    inode_info = (struct assoofs_inode_info *)bh->b_data;
+
+    struct assoofs_super_block_info *afs_sb = sb->s_fs_info;
+    struct assoofs_inode_info *buffer = NULL;
+    int i;
+
+    for (i = 0; i < afs_sb->inodes_count; i++) {
+        if (inode_info->inode_no == inode_no) {
+            buffer = kmalloc(sizeof(struct assoofs_inode_info), GFP_KERNEL);
+            if (!buffer) {
+                brelse(bh);
+                return NULL;
+            }
+            memcpy(buffer, inode_info, sizeof(*buffer));
+            brelse(bh);
+            return buffer;
+        }
+        inode_info++;
+    }
+
+    brelse(bh);
+    return buffer;
 }
 
 /*
@@ -143,6 +209,7 @@ int assoofs_fill_super(struct super_block *sb, void *data, int silent) {
     inode_set_atime(root_inode,ts.tv_sec,ts.tv_nsec);//asignamos la hora de acceso al inodo raiz
     root_inode->i_private = assoofs_get_inode_info(sb,ASSOOFS_ROOTDIR_INODE_NUMBER);//asignamos la informacion del inodo raiz
     sb->s_root = d_make_root(root_inode);//asignamos el inodo raiz al superbloque
+    brelse(bh);//liberamos el buffer_head
     return 0;
 }
 
