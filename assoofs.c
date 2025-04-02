@@ -91,10 +91,10 @@ struct dentry *assoofs_lookup(struct inode *parent_inode, struct dentry *child_d
     struct assoofs_inode_info *parent_info = parent_inode->i_private;//Sacamos la informacion del inodo padre
     struct super_block *sb = parent_inode->i_sb;//Sacamos el superbloque del inodo padre
     struct buffer_head *bh;//Creamos un buffer_head para leer el bloque de datos
-    bh = sb_bread(sb, parent_inode_info->data_block_number);//Cargamos el superbloque en bh
+    bh = sb_bread(sb, parent_info->data_block_number);//Cargamos el superbloque en bh comprobar si es parent_inode_info o parent_info  
 
     struct assoofs_dir_record_entry *record = (struct assoofs_dir_record_entry *)bh->b_data;//Record sera el puntero que usaremos para recorrer nustro sistema de ficheros
-    for(i=0;i<parent_info->dir_children_count;i++){//Iniciamos el bucle for para recorrer  nuestro sistema de archivos, 
+    for(int i=0;i<parent_info->dir_children_count;i++){//Iniciamos el bucle for para recorrer  nuestro sistema de archivos, 
         if(!strcmp(record->filename, child_dentry->d_name.name) && !record->entry_removed == ASSOOFS_FALSE){//Comparamos los nombres del archivo en el que se encuentra el puntero y del archivo que se supones que nos han pedido localizar
             struct inode *inode = assoofs_get_inode(sb, record->inode_no);//Si encontramos el archivo que buscamos, creamos un inodo para el archivo
             inode_init_owner(&nop_mnt_idmap,inode,parent_inode,((struct assoofs_inode_info *)inode->i_private)->mode);//Inicializamos el inodo
@@ -106,11 +106,76 @@ struct dentry *assoofs_lookup(struct inode *parent_inode, struct dentry *child_d
     return NULL;
 }
 
+int assoofs_sb_get_a_freeinode(struct super_block *sb, unsigned long *inode){
+    struct assoofs_super_block_info *assoofs_sb = sb->s_fs_info;
+    int i;
+    for(i = 1;i<ASSOOFS_MAX_FILESYSTEM_OBJECTS_SUPPORTED;i++){//buscas cual es el bloque libre
+        if(~(assoofs_sb->free_inodes & (1 << i))){
+            break;
+        }
+    }
+    *inode = i;//Guardas cual es su numero de bloque
+    assoofs_sb->free_inodes |= (1 << i);//movida que no entiendo
+    assoofs_save_sb_info(sb);//escribes en superbloque en el disco
+    return 0;
+}
+
 
 
 
 static int assoofs_create(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, umode_t mode, bool excl) {
     printk(KERN_INFO "New file request\n");
+
+    struct inode *inode;
+    struct super_block *sb;
+    sb = dir->i_sb;
+
+    inode = new_inode(sb);
+    inode->i_sb = sb;
+    struct timespec64 ts = current_time(inode);
+    inode_set_ctime(inode,ts.tv_sec,ts.tv_nsec);
+    inode_set_mtime(inode,ts.tv_sec,ts.tv_nsec);
+    inode_set_atime(inode,ts.tv_sec,ts.tv_nsec);
+
+    inode->i_op = &assoofs_inode_ops;
+    assoofs_sb_get_freeinode(sb, &inode->i_ino);
+
+    struct assoofs_inode_info *inode_info;
+    inode_info = kmalloc(sizeof(struct assoofs_inode_info), GFP_KERNEL);
+    inode_info->inode_no = inode->i_ino;
+    inode_info->mode = mode;
+    inode_info->file_size = 0;
+    inode->i_private = inode_info;
+
+    inode->i_fop = &assoofs_file_operations;
+
+    inode_init_owner(&nop_mnt_idmap,inode,dir,mode);
+    d_add(dentry,inode);
+
+    assoofs_sb_get_a_freeblock(sb, &inode_info->data_block_number);
+
+    assoofs_add_inode_info(sb, inode_info);
+
+
+    struct assoofs_inode_info *parent_inode_info;
+    struct assoofs_dir_record_entry *dir_contents;
+    struct buffer_head *bh;
+
+    parent_inode_info = dir->i_private;
+    bh = sb_bread(sb, parent_inode_info->data_block_number);
+
+    dir_contents = (struct assoofs_dir_record_entry *)bh->b_data;
+    dir_contents += parent_inode_info->dir_children_count;
+    dir_contents->inode_no = inode_info->inode_no;
+
+    strcpy(dir_contents->filename, dentry->d_name.name);
+    mark_buffer_dirty(bh);
+    sync_dirty_buffer(bh);
+    brelse(bh);
+
+    parent_inode_info->dir_children_count++;
+    assoofs_save_inode_info(sb, parent_inode_info);
+
     return 0;
 }
 
