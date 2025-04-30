@@ -21,6 +21,15 @@ struct dentry *assoofs_lookup(struct inode *parent_inode, struct dentry *child_d
 static int assoofs_mkdir(struct mnt_idmap *idmap, struct inode *dir , struct dentry *dentry, umode_t mode); //MODIFICADO MIGRACION el primer argumento cambia
 static int assoofs_remove(struct inode *dir, struct dentry *dentry);
 struct assoofs_inode_info *assoofs_get_inode_info(struct super_block *sb, uint64_t inode_no);
+static struct inode *assoofs_get_inode(struct super_block *sb, int ino);
+void assoofs_save_sb_info(struct super_block *vsb);
+int assoofs_sb_get_a_freeinode(struct super_block *sb, unsigned long *inode);
+int assoofs_sb_get_a_freeblock(struct super_block *sb, uint64_t *block);
+void assoofs_add_inode_info(struct super_block *sb, struct assoofs_inode_info *inode);
+int assoofs_save_inode_info(struct super_block *sb, struct assoofs_inode_info *inode_info);
+struct assoofs_inode_info *assoofs_search_inode_info(struct super_block *sb, struct assoofs_inode_info *start, struct assoofs_inode_info *search);
+int assoofs_sb_get_freeinode(struct super_block *sb, unsigned long *inode);
+int assoofs_sb_get_freeblock(struct super_block *sb, uint64_t *block);
 
 /*
  *  Estructuras de datos necesarias
@@ -95,7 +104,7 @@ struct dentry *assoofs_lookup(struct inode *parent_inode, struct dentry *child_d
 
     struct assoofs_dir_record_entry *record = (struct assoofs_dir_record_entry *)bh->b_data;//Record sera el puntero que usaremos para recorrer nustro sistema de ficheros
     for(int i=0;i<parent_info->dir_children_count;i++){//Iniciamos el bucle for para recorrer  nuestro sistema de archivos, 
-        if(!strcmp(record->filename, child_dentry->d_name.name) && !record->entry_removed == ASSOOFS_FALSE){//Comparamos los nombres del archivo en el que se encuentra el puntero y del archivo que se supones que nos han pedido localizar
+        if(!strcmp(record->filename, child_dentry->d_name.name) && (!record->entry_removed) == ASSOOFS_FALSE){//Comparamos los nombres del archivo en el que se encuentra el puntero y del archivo que se supones que nos han pedido localizar
             struct inode *inode = assoofs_get_inode(sb, record->inode_no);//Si encontramos el archivo que buscamos, creamos un inodo para el archivo
             inode_init_owner(&nop_mnt_idmap,inode,parent_inode,((struct assoofs_inode_info *)inode->i_private)->mode);//Inicializamos el inodo
             d_add(child_dentry,inode);//Añadimos el inodo al directorio
@@ -139,9 +148,9 @@ int assoofs_sb_get_a_freeblock(struct super_block *sb, uint64_t *block){
         if(~(assoofs_sb->free_blocks) & (1<<i)){
             break;//Pedir que me expliquen esto no lo entiendo
         }
-        *block = i;
+        
     }
-
+    *block = i;
     assoofs_sb->free_blocks != (1 << i);
     assoofs_save_sb_info(sb);
     return 0;
@@ -150,8 +159,9 @@ int assoofs_sb_get_a_freeblock(struct super_block *sb, uint64_t *block){
 void assoofs_add_inode_info(struct super_block *sb, struct assoofs_inode_info *inode){
     struct assoofs_super_block_info *assoofs_sb = sb->s_fs_info;
     struct buffer_head *bh;
+    struct assoofs_inode_info *inode_info;
     bh = sb_bread(sb, ASSOOFS_INODESTORE_BLOCK_NUMBER);
-    inode_info = (struct assoofs_inode_info *)bh->b_data;//creo que el inode info hay que sacarlo de la variable inode que nos pasan o si inode es el propio inode info, preguntaar
+    inode_info = (struct assoofs_inode_info *)bh->b_data;//creo que es una variable que tengo que creaar
     inode_info += assoofs_sb->inodes_count;
     memcpy(inode_info, inode, sizeof(struct assoofs_inode_info));
 
@@ -165,25 +175,26 @@ void assoofs_add_inode_info(struct super_block *sb, struct assoofs_inode_info *i
 }
 
 int assoofs_save_inode_info(struct super_block *sb, struct assoofs_inode_info *inode_info){
-    struct assoofs_inode_info = NULL;
     struct buffer_head *bh;
+    struct assoofs_inode_info *inode_pos;
 
     bh = sb_bread(sb, ASSOOFS_INODESTORE_BLOCK_NUMBER);
     inode_info = (struct assoofs_inode_info *)bh->b_data;
-    int inode_pos = assoofs_search_inode_info(sb, (struct assoofs_inode_info *)bh->b_data, inode_info);//He supuesto que inode pos es un int
+    inode_pos = assoofs_search_inode_info(sb, (struct assoofs_inode_info *)bh->b_data, inode_info);//He supuesto que inode pos es un int
     
-    memcpy(inode_pos, inode_info, sizeof(int));
-    /* memcpy(inode_pos, inode_info, sizeof(*inode_pos)); asi estaba antes */
+    memcpy(inode_pos, inode_info, sizeof(*inode_pos));
     mark_buffer_dirty(bh);
     sync_dirty_buffer(bh);
 
     return 0;
 }
 
-int assoofs_search_inode_info(struct super_block *sb, struct assoofs_inode_info *start, struct assoofs_inode_info *search){
+
+
+struct assoofs_inode_info *assoofs_search_inode_info(struct super_block *sb, struct assoofs_inode_info *start, struct assoofs_inode_info *search){
     uint count = 0;
     while(start->inode_no != search->inode_no && count < ((struct assoofs_super_block_info *)sb->s_fs_info)->inodes_count){
-        start++;
+        start++;//incrementamos el puntero para que apunte al siguiente bloque
         count++;
     }
 
@@ -195,7 +206,8 @@ int assoofs_search_inode_info(struct super_block *sb, struct assoofs_inode_info 
 }
 
 int assoofs_mkdir(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, umode_t mode) {
-    
+    printk(KERN_INFO "New directory request\n");
+
     struct inode *inode;
     struct super_block *sb;
     sb = dir->i_sb;
@@ -218,6 +230,7 @@ int assoofs_mkdir(struct mnt_idmap *idmap, struct inode *dir, struct dentry *den
     inode->i_private = inode_info;
     inode->i_fop = &assoofs_dir_operations;
     inode_init_owner(&nop_mnt_idmap,inode,dir,inode_info->mode);    
+    return 0;
 }
 
 
@@ -280,10 +293,7 @@ static int assoofs_create(struct mnt_idmap *idmap, struct inode *dir, struct den
     return 0;
 }
 
-static int assoofs_mkdir(struct mnt_idmap *idmap, struct inode *dir , struct dentry *dentry, umode_t mode) {
-    printk(KERN_INFO "New directory request\n");
-    return 0;
-}
+
 
 static int assoofs_remove(struct inode *dir, struct dentry *dentry){
     printk(KERN_INFO "assoofs_remove request\n");
