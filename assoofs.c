@@ -120,6 +120,107 @@ int assoofs_sb_get_a_freeinode(struct super_block *sb, unsigned long *inode){
     return 0;
 }
 
+//Hecho por mi cuenta preguntar si sta bien
+void assoofs_save_sb_info(struct super_block *vsb){
+    struct buffer_head *bh;
+    struct assoofs_super_block_info *sb = vsb->s_fs_info; //Informacion del superbloque que hay en memoria
+    bh = sb_bread(vsb, ASSOOFS_SUPERBLOCK_BLOCK_NUMBER);
+    bh -> b_data = (char *)sb;
+
+    mark_buffer_dirty(bh);
+    sync_dirty_buffer(bh);
+    brelse(bh);
+}
+
+int assoofs_sb_get_a_freeblock(struct super_block *sb, uint64_t *block){
+    struct assoofs_super_block_info *assoofs_sb = sb->s_fs_info;
+    int i;
+    for(i=2; i < ASSOOFS_MAX_FILESYSTEM_OBJECTS_SUPPORTED;i++){
+        if(~(assoofs_sb->free_blocks) & (1<<i)){
+            break;//Pedir que me expliquen esto no lo entiendo
+        }
+        *block = i;
+    }
+
+    assoofs_sb->free_blocks != (1 << i);
+    assoofs_save_sb_info(sb);
+    return 0;
+}
+
+void assoofs_add_inode_info(struct super_block *sb, struct assoofs_inode_info *inode){
+    struct assoofs_super_block_info *assoofs_sb = sb->s_fs_info;
+    struct buffer_head *bh;
+    bh = sb_bread(sb, ASSOOFS_INODESTORE_BLOCK_NUMBER);
+    inode_info = (struct assoofs_inode_info *)bh->b_data;//creo que el inode info hay que sacarlo de la variable inode que nos pasan o si inode es el propio inode info, preguntaar
+    inode_info += assoofs_sb->inodes_count;
+    memcpy(inode_info, inode, sizeof(struct assoofs_inode_info));
+
+    mark_buffer_dirty(bh);
+    sync_dirty_buffer(bh);
+
+    if(assoofs_sb->inodes_count <= inode->inode_no){
+        assoofs_sb->inodes_count++;
+        assoofs_save_sb_info(sb);
+    }
+}
+
+int assoofs_save_inode_info(struct super_block *sb, struct assoofs_inode_info *inode_info){
+    struct assoofs_inode_info = NULL;
+    struct buffer_head *bh;
+
+    bh = sb_bread(sb, ASSOOFS_INODESTORE_BLOCK_NUMBER);
+    inode_info = (struct assoofs_inode_info *)bh->b_data;
+    int inode_pos = assoofs_search_inode_info(sb, (struct assoofs_inode_info *)bh->b_data, inode_info);//He supuesto que inode pos es un int
+    
+    memcpy(inode_pos, inode_info, sizeof(int));
+    /* memcpy(inode_pos, inode_info, sizeof(*inode_pos)); asi estaba antes */
+    mark_buffer_dirty(bh);
+    sync_dirty_buffer(bh);
+
+    return 0;
+}
+
+int assoofs_search_inode_info(struct super_block *sb, struct assoofs_inode_info *start, struct assoofs_inode_info *search){
+    uint count = 0;
+    while(start->inode_no != search->inode_no && count < ((struct assoofs_super_block_info *)sb->s_fs_info)->inodes_count){
+        start++;
+        count++;
+    }
+
+    if(start->inode_no == search->inode_no){
+        return start;
+    }else{
+        return NULL;
+    }
+}
+
+int assoofs_mkdir(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, umode_t mode) {
+    
+    struct inode *inode;
+    struct super_block *sb;
+    sb = dir->i_sb;
+
+    inode = new_inode(sb);
+    inode->i_sb = sb;
+    struct timespec64 ts = current_time(inode);
+    inode_set_ctime(inode,ts.tv_sec,ts.tv_nsec);
+    inode_set_mtime(inode,ts.tv_sec,ts.tv_nsec);
+    inode_set_atime(inode,ts.tv_sec,ts.tv_nsec);
+
+    inode->i_op = &assoofs_inode_ops; 
+    assoofs_sb_get_freeinode(sb, &inode->i_ino);
+
+    struct assoofs_inode_info *inode_info;
+    inode_info = kmalloc(sizeof(struct assoofs_inode_info), GFP_KERNEL);
+    inode_info->inode_no = inode->i_ino;
+    inode_info->mode = S_IFDIR | mode;//puede ser que tenga esto mal pero no se
+    inode_info->file_size = 0;
+    inode->i_private = inode_info;
+    inode->i_fop = &assoofs_dir_operations;
+    inode_init_owner(&nop_mnt_idmap,inode,dir,inode_info->mode);    
+}
+
+
 
 
 
@@ -247,7 +348,7 @@ int assoofs_fill_super(struct super_block *sb, void *data, int silent) {
     bh = sb_bread(sb, ASSOOFS_SUPERBLOCK_BLOCK_NUMBER);//cargamos el superbloque en bh
     // 2.- Comprobar los parámetros del superbloque
     assoofs_sb = (struct assoofs_super_block_info *)bh->b_data;//cargamos los datos del bloque en la estructura assoofs_sb
-    if(assofs_sb->magic != ASSOOFS_MAGIC){//comprobamos que el magic number sea el correcto
+    if(assoofs_sb->magic != ASSOOFS_MAGIC){//comprobamos que el magic number sea el correcto
         printk("Error al comprobar el numero magico del superbloque\n");
         return -1;
     }
@@ -258,7 +359,7 @@ int assoofs_fill_super(struct super_block *sb, void *data, int silent) {
     // 3.- Escribir la información persistente leída del dispositivo de bloques en el superbloque sb, incluído el campo s_op con las operaciones que soporta.
     sb->s_magic = ASSOOFS_MAGIC;//asignamos el magic number al superbloque en el kernel
     sb->s_maxbytes = ASSOOFS_DEFAULT_BLOCK_SIZE;//asignamos el tamaño maximo de bytes al superbloque en el kernel
-    sb->s_op = assoofs_sops;//Puede ser que aqui me falte un & pero no estoy seguro
+    sb->s_op = &assoofs_sops;//Puede ser que aqui me falte un & pero no estoy seguro
     sb->s_fs_info = assoofs_sb;//asignamos la informacion del superbloque a la informacion del superbloque en el kernel
     // 4.- Crear el inodo raíz y asignarle operaciones sobre inodos (i_op) y sobre directorios (i_fop)
     struct inode *root_inode;//creamos un inodo para el directorio raiz

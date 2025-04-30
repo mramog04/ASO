@@ -38,3 +38,17 @@ struct assoofs_inode_info {
         uint64_t dir_children_count;  
     };
 };
+
+struct assoofs_inode_info *assoofs_get_inode_info(struct super_block *sb, uint64_t inode_no);
+int assoofs_sb_get_freeinode(struct super_block *sb, unsigned long *inode);
+int assoofs_sb_get_freeblock(struct super_block *sb, uint64_t *block);
+void assoofs_save_sb_info(struct super_block *vsb);
+void assoofs_add_inode_info(struct super_block *sb, struct assoofs_inode_info *inode);
+int assoofs_save_inode_info(struct super_block *sb, struct assoofs_inode_info *inode_info);
+int assoofs_search_inode_info(struct super_block *sb, struct assoofs_inode_info *start, struct assoofs_inode_info *search);
+struct inode *assoofs_get_inode(struct super_block *sb, int ino);
+
+extern const struct file_operations assoofs_file_operations;
+extern const struct file_operations assoofs_dir_operations;
+extern const struct inode_operations assoofs_inode_ops;
+extern const struct super_operations assoofs_sops;
