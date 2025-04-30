@@ -28,7 +28,8 @@ int assoofs_sb_get_a_freeblock(struct super_block *sb, uint64_t *block);
 void assoofs_add_inode_info(struct super_block *sb, struct assoofs_inode_info *inode);
 int assoofs_save_inode_info(struct super_block *sb, struct assoofs_inode_info *inode_info);
 struct assoofs_inode_info *assoofs_search_inode_info(struct super_block *sb, struct assoofs_inode_info *start, struct assoofs_inode_info *search);
-
+int assoofs_sb_set_a_freeinode(struct super_block *sb, unsigned long inode);
+int assoofs_sb_set_a_freeblock(struct super_block *sb, uint64_t block);
 
 /*
  *  Estructuras de datos necesarias
@@ -71,9 +72,28 @@ static const struct super_operations assoofs_sops = {
  *  Funciones que realizan operaciones sobre ficheros
  */
 
-ssize_t assoofs_read(struct file * filp, char __user * buf, size_t len, loff_t * ppos) {
+ssize_t assoofs_read(struct file *filp, char __user *buf, size_t len, loff_t *ppos){
     printk(KERN_INFO "Read request\n");
-    return 0;
+    struct assoofs_inode_info *inode_info = filp->f_path.dentry->d_inode->i_private;
+
+    if(*ppos >= inode_info->file_size) return 0;
+
+    struct buffer_head *bh;
+    char *buffer;
+
+    bh = sb_bread(filp->f_path.dentry->d_inode->i_sb, inode_info->data_block_number);
+    buffer = (char *)bh->b_data;
+
+    int nbytes;
+    buffer+= *ppos;
+    nbytes = min((size_t) inode_info->file_size - (size_t) *ppos, len);
+    if(copy_from_user(buffer, buf, nbytes)!=0){
+        printk(KERN_ERR "Error copying data from user\n");
+    }
+
+    *ppos += nbytes;
+    brelse(bh);
+    return nbytes;
 }
 
 ssize_t assoofs_write(struct file * filp, const char __user * buf, size_t len, loff_t * ppos) {
@@ -81,14 +101,7 @@ ssize_t assoofs_write(struct file * filp, const char __user * buf, size_t len, l
     return 0;
 }
 
-/*
- *  Funciones que realizan operaciones sobre directorios
- */
 
-static int assoofs_iterate(struct file *filp, struct dir_context *ctx) {
-    printk(KERN_INFO "Iterate request\n");
-    return 0;
-}
 
 
 /*
@@ -296,8 +309,73 @@ static int assoofs_create(struct mnt_idmap *idmap, struct inode *dir, struct den
 
 static int assoofs_remove(struct inode *dir, struct dentry *dentry){
     printk(KERN_INFO "assoofs_remove request\n");
+    struct super_block *sb = dir->i_sb;
+    struct inode *inode_remove = dentry->d_inode;
+    struct assoofs_inode_info *inode_info = inode_remove->i_private;
+    struct assoofs_inode_info *parent_inode_info = dir->i_private;
+
+    struct buffer_head *bh;
+    struct assoofs_dir_record_entry *dir_contents;
+    bh = sb_read(sb, parent_inode_info->data_block_number);
+    dir_contents = (struct assoofs_dir_record_entry *)bh->b_data;
+
+    for(int i = 0; i < parent_inode_info->dir_children_count; i++){
+        if(!strcmp(dir_contents->filename, dentry->d_name.name) && dir_contents->inode_no == inode_info->inode_no){
+            printk(KERN_INFO "Removing %s\n", dir_contents->filename);
+            dir_contents->entry_removed = ASSOOFS_TRUE;
+            break;
+        }
+        dir_contents++;
+    }
+
+    mark_buffer_dirty(bh); 
+    sync_dirty_buffer(bh);
+    brelse(bh);
+
+    assoofs_sb_set_a_freeinode(sb, inode_info->inode_no);
+    assoofs_sb_set_a_freeblock(sb, inode_info->data_block_number);
+
+
     return 0;
 }
+
+int assoofs_sb_set_a_freeinode(struct super_block *sb, unsigned long inode){
+    struct assoofs_super_block_info *assoofs_sb = sb->s_fs_info;
+    assoofs_sb->free_inodes &= ~(1 << inode);
+    assoofs_save_sb_info(sb);
+    return 0;
+}
+
+int assoofs_sb_set_a_freeblock(struct super_block *sb, uint64_t block){
+    struct assoofs_super_block_info *assoofs_sb = sb->s_fs_info;
+    assoofs_sb->free_blocks &= ~(1 << block);
+    assoofs_save_sb_info(sb);
+    return 0;
+}
+
+static int assoofs_iterate(struct file *filp, struct dir_context *ctx){
+    struct inode *inode = filp->f_path.dentry->d_inode;
+    struct super_block *sb = inode->i_sb;
+    struct assoofs_inode_info *inode_info = inode->i_private;
+
+    if (ctx->pos) return 0;
+    if((!S_ISDIR(inode_info->mode))) return -1;
+
+    struct buffer_head *bh = sb_bread(sb, inode_info->data_block_number);
+    struct assoofs_dir_record_entry *record = (struct assoofs_dir_record_entry *)bh->b_data;
+    for(int i = 0; i < inode_info->dir_children_count; i++){
+        if(record->entry_removed == ASSOOFS_FALSE){
+            dir_emit(ctx, record->filename, ASSOOFS_FILENAME_MAXLEN, record->inode_no, DT_UNKNOWN);
+            ctx->pos += sizeof(struct assoofs_dir_record_entry);
+        }
+        record++;
+    }
+
+    brelse(bh);
+    return 0;
+}
+
+
 
 static struct inode *assoofs_get_inode(struct super_block *sb, int ino){
     struct assoofs_inode_info *inode_info;
