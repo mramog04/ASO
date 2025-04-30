@@ -28,8 +28,7 @@ int assoofs_sb_get_a_freeblock(struct super_block *sb, uint64_t *block);
 void assoofs_add_inode_info(struct super_block *sb, struct assoofs_inode_info *inode);
 int assoofs_save_inode_info(struct super_block *sb, struct assoofs_inode_info *inode_info);
 struct assoofs_inode_info *assoofs_search_inode_info(struct super_block *sb, struct assoofs_inode_info *start, struct assoofs_inode_info *search);
-int assoofs_sb_get_freeinode(struct super_block *sb, unsigned long *inode);
-int assoofs_sb_get_freeblock(struct super_block *sb, uint64_t *block);
+
 
 /*
  *  Estructuras de datos necesarias
@@ -220,7 +219,7 @@ int assoofs_mkdir(struct mnt_idmap *idmap, struct inode *dir, struct dentry *den
     inode_set_atime(inode,ts.tv_sec,ts.tv_nsec);
 
     inode->i_op = &assoofs_inode_ops; 
-    assoofs_sb_get_freeinode(sb, &inode->i_ino);
+    assoofs_sb_get_a_freeinode(sb, &inode->i_ino);
 
     struct assoofs_inode_info *inode_info;
     inode_info = kmalloc(sizeof(struct assoofs_inode_info), GFP_KERNEL);
@@ -252,7 +251,7 @@ static int assoofs_create(struct mnt_idmap *idmap, struct inode *dir, struct den
     inode_set_atime(inode,ts.tv_sec,ts.tv_nsec);
 
     inode->i_op = &assoofs_inode_ops;
-    assoofs_sb_get_freeinode(sb, &inode->i_ino);
+    assoofs_sb_get_a_freeinode(sb, &inode->i_ino);
 
     struct assoofs_inode_info *inode_info;
     inode_info = kmalloc(sizeof(struct assoofs_inode_info), GFP_KERNEL);

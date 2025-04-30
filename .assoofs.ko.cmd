@@ -1,0 +1,1 @@
+savedcmd_/home/osboxes/ASO/assoofs.ko := ld -r -m elf_x86_64 -z noexecstack --no-warn-rwx-segments --build-id=sha1  -T scripts/module.lds -o /home/osboxes/ASO/assoofs.ko /home/osboxes/ASO/assoofs.o /home/osboxes/ASO/assoofs.mod.o
