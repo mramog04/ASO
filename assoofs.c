@@ -98,7 +98,28 @@ ssize_t assoofs_read(struct file *filp, char __user *buf, size_t len, loff_t *pp
 
 ssize_t assoofs_write(struct file * filp, const char __user * buf, size_t len, loff_t * ppos) {
     printk(KERN_INFO "Write request\n");
-    return 0;
+    if(*ppos + len >= ASSOOFS_DEFAULT_BLOCK_SIZE){
+        printk(KERN_ERR "Error writing data\n");
+        return -1;
+    }
+    struct buffer_head *bh;
+    char *buffer;
+    struct assoofs_inode_info *inode_info = filp->f_path.dentry->d_inode->i_private;
+
+    bh = sb_bread(filp->f_path.dentry->d_inode->i_sb, inode_info->data_block_number);
+    buffer = (char *)bh->b_data;
+    buffer += *ppos;
+    if(copy_from_user(buffer, buf, len)!=0){
+        printk(KERN_ERR "Error copying data from user\n");
+    }
+    *ppos += len;
+    mark_buffer_dirty(bh);
+    sync_dirty_buffer(bh);
+
+    inode_info->file_size = *ppos;
+    assoofs_save_inode_info(filp->f_path.dentry->d_inode->i_sb, inode_info);
+    brelse(bh);
+    return len;
 }
 
 
@@ -316,7 +337,7 @@ static int assoofs_remove(struct inode *dir, struct dentry *dentry){
 
     struct buffer_head *bh;
     struct assoofs_dir_record_entry *dir_contents;
-    bh = sb_read(sb, parent_inode_info->data_block_number);
+    bh = sb_bread(sb, parent_inode_info->data_block_number);
     dir_contents = (struct assoofs_dir_record_entry *)bh->b_data;
 
     for(int i = 0; i < parent_inode_info->dir_children_count; i++){
